@@ -174,7 +174,7 @@ export default function CyberpsychoMeter() {
   }, [intensity, current.color]);
 
   return (
-    <section id="meter" ref={sectionRef} className="relative overflow-hidden px-5 pt-40 py-24">
+    <section id="meter" ref={sectionRef} className="relative overflow-hidden px-5 pt-45 py-24">
       <div data-depth="background"><HudBackground intensity={intensity} color={current.color} nodes={nodes} conns={conns} pulses={pulses} radarDur={radarDur} /></div>
 
       <div data-depth="content" className="relative z-10 mx-auto max-w-3xl">
