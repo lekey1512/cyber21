@@ -10,49 +10,44 @@ import {
  * SectionDistortionTransition
  * ---------------------------
  * A reusable scroll-bound "analog signal interference" transition between two
- * adjacent sections. As the boundary crosses the viewport center, a short
- * cinematic distortion burst plays, then everything locks back to a stable
+ * adjacent sections. As the boundary between the two sections crosses the
+ * viewport center, a short cinematic distortion burst plays across BOTH
+ * sections simultaneously, then everything locks back to a perfectly stable
  * picture.
  *
- * Rendering engine: pure GPU-friendly CSS compositing. No SVG filters, no
- * backdrop-filter, no runtime SVG attribute writes. The only job of JS is to
- * compute a single normalized intensity (0..1) from scroll position and push
- * it to a handful of CSS variables on one element. Every visual layer is driven
- * by CSS (transitions, animations, calc on those variables).
+ * Pipeline (all layers combined, scroll-driven, no WebGL / no video):
+ *   1. Horizontal wave displacement  — SVG feTurbulence + feDisplacementMap
+ *   2. Subtle RGB channel split      — feColorMatrix + feOffset + feBlend
+ *   3. Animated scanlines            — CSS repeating-linear-gradient overlay
+ *   4. TV film-grain noise           — SVG turbulence background, scrolled
+ *   5. Signal-loss crossfade dim     — both sections dip in opacity at peak
  *
- * Layers (all composited with mix-blend-mode, transform & opacity — the cheap
- * GPU properties — so nothing triggers layout or heavy paint):
- *   1. Scanlines       — repeating-linear-gradient, CSS-animated drift.
- *   2. Film grain       — tiled SVG-noise data-URI texture, CSS keyframe drift.
- *   3. RGB split        — two translated overlay layers (red / cyan) blended over
- *                         a shared snapshot-free stack; separation scales with
- *                         intensity.
- *   4. Glitch slices    — horizontal bands via clip-path, each with its own
- *                         CSS-animated translateX jitter.
- *   5. Brightness dip   — a black veil whose opacity tracks intensity.
- *   6. Fade in/out       — the whole overlay's opacity follows sin(πt).
- *
- * The boundary's document offset is cached once and refreshed only on resize /
- * ResizeObserver; the rAF loop reads only `window.scrollY` (no forced layout).
- * An IntersectionObserver arms the loop only while the boundary is near the
- * viewport, then stops and resets when it leaves.
+ * The effect is scroll-bound (not time-bound): an `IntersectionObserver` arms a
+ * single rAF loop only while the boundary is near the viewport. Every frame the
+ * loop maps the boundary's position to a 0..1 progress `t`, folds it through a
+ * sin(πt) envelope so distortion ramps in and out smoothly, and writes the
+ * resulting values directly to DOM/SVG attributes — no React re-renders, no
+ * per-frame allocations. When the boundary leaves the zone the loop stops and
+ * all primitives are reset to neutral (filter: none, scale 0, opacity 1).
  */
 
 export interface SectionDistortionTransitionProps {
   /** Exactly two sections, in order. Extra children render after the pair. */
   children: ReactNode;
-  /** Height of the scroll zone as a fraction of viewport height (default 0.7). */
-  zoneFactor?: number;
+  /** Peak horizontal wave displacement in px (default 8). */
+  maxDisplacement?: number;
   /** Peak RGB channel separation in px (default 4). */
   maxRgbSplit?: number;
-  /** Peak glitch-slice horizontal shift in px (default 10). */
-  maxSliceShift?: number;
-  /** Peak brightness-dip opacity, 0..1 (default 0.14). */
-  dimOpacity?: number;
+  /** Height of the transition zone as a fraction of viewport height (default 0.7). */
+  zoneFactor?: number;
+  /** Peak noise overlay opacity (default 0.12). */
+  noiseOpacity?: number;
   /** Peak scanline opacity (default 0.18). */
   scanlineOpacity?: number;
-  /** Peak film-grain opacity (default 0.12). */
-  grainOpacity?: number;
+  /** How much both sections dim at the peak of the burst, 0..1 (default 0.12). */
+  sectionDim?: number;
+  /** feTurbulence baseFrequency "fx fy" — lower = smoother waves (default "0.012 0.02"). */
+  baseFrequency?: string;
   /** Extra className on the outer wrapper. */
   className?: string;
 }
@@ -61,102 +56,138 @@ const clamp01 = (v: number) => (v < 0 ? 0 : v > 1 ? 1 : v);
 
 export default function SectionDistortionTransition({
   children,
-  zoneFactor = 0.7,
+  maxDisplacement = 8,
   maxRgbSplit = 4,
-  maxSliceShift = 10,
-  dimOpacity = 0.14,
+  zoneFactor = 0.7,
+  noiseOpacity = 0.12,
   scanlineOpacity = 0.18,
-  grainOpacity = 0.12,
+  sectionDim = 0.12,
+  baseFrequency = '0.012 0.02',
   className = '',
 }: SectionDistortionTransitionProps) {
   const rawId = useId().replace(/[:]/g, '');
-  const uid = `sdt-${rawId}`;
+  const fid = `sdt-${rawId}`;
 
   const wrapRef = useRef<HTMLDivElement>(null);
-  const boundaryRef = useRef<HTMLDivElement>(null);
-  const hostRef = useRef<HTMLDivElement>(null);
+  const sentinelRef = useRef<HTMLDivElement>(null);
+  const topRef = useRef<HTMLDivElement>(null);
+  const bottomRef = useRef<HTMLDivElement>(null);
+  const overlayRef = useRef<HTMLDivElement>(null);
+  const scanRef = useRef<HTMLDivElement>(null);
+  const noiseRef = useRef<HTMLDivElement>(null);
 
   const kids = Children.toArray(children);
   const first = kids[0] ?? null;
   const second = kids[1] ?? null;
   const rest = kids.slice(2);
 
-  // Six glitch slice bands. Each gets a unique clip-path window and its own
-  // CSS-animated translateX keyframes (defined inline via a <style> tag so the
-  // keyframe names are unique to this instance and don't collide).
-  const slices = [
-    { top: 8, height: 6, delay: 0.0, amp: 1.0 },
-    { top: 22, height: 4, delay: -0.4, amp: 0.7 },
-    { top: 34, height: 9, delay: -0.2, amp: 1.2 },
-    { top: 50, height: 5, delay: -0.6, amp: 0.8 },
-    { top: 63, height: 7, delay: -0.1, amp: 1.0 },
-    { top: 78, height: 5, delay: -0.5, amp: 0.6 },
-  ];
-
   useEffect(() => {
     const wrap = wrapRef.current;
-    const boundary = boundaryRef.current;
-    const host = hostRef.current;
-    if (!wrap || !boundary || !host) return;
+    const sentinel = sentinelRef.current;
+    const top = topRef.current;
+    const bottom = bottomRef.current;
+    const scan = scanRef.current;
+    const noise = noiseRef.current;
+    if (!wrap || !sentinel || !top || !bottom || !scan || !noise) return;
+
+    const svg = wrap.querySelector('svg');
+    const turb = svg?.querySelector(`#${fid}-turb`) as SVGFETurbulenceElement | null;
+    const toff = svg?.querySelector(`#${fid}-toff`) as SVGFEOffsetElement | null;
+    const disp = svg?.querySelector(`#${fid}-disp`) as SVGFEDisplacementMapElement | null;
+    const roff = svg?.querySelector(`#${fid}-roff`) as SVGFEOffsetElement | null;
+    const coff = svg?.querySelector(`#${fid}-coff`) as SVGFEOffsetElement | null;
 
     let raf = 0;
     let running = false;
-    let boundaryDocTop = 0;
-    let lastIntensity = -1;
-    const EPS = 0.004;
+    let active = false;
+    let lastNow = performance.now();
+    let timeAcc = 0;
 
-    // Recompute the boundary's document offset. Called outside the rAF loop
-    // (mount, resize, ResizeObserver) so the hot path never forces layout.
-    const cacheLayout = () => {
-      const r = boundary.getBoundingClientRect();
-      boundaryDocTop = r.top + window.scrollY;
+    const writeAttr = (el: Element | null, name: string, v: number) => {
+      if (el) el.setAttribute(name, v.toFixed(2));
     };
 
-    // Push the single intensity value to CSS variables on the host. All visual
-    // layers read these via calc(); no other JS-driven style writes happen.
-    const apply = (intensity: number) => {
-      if (Math.abs(intensity - lastIntensity) < EPS) return;
-      lastIntensity = intensity;
-      const iStr = intensity.toFixed(4);
-      host.style.setProperty('--sdt-i', iStr);
-      host.style.setProperty('--sdt-rgb', (intensity * maxRgbSplit).toFixed(2));
-      host.style.setProperty('--sdt-slice', (intensity * maxSliceShift).toFixed(2));
-      host.style.setProperty('--sdt-dim', (intensity * dimOpacity).toFixed(4));
-      host.style.setProperty('--sdt-scan', (intensity * scanlineOpacity).toFixed(4));
-      host.style.setProperty('--sdt-grain', (intensity * grainOpacity).toFixed(4));
-    };
-
+    // Reset every primitive to a perfectly neutral picture.
     const reset = () => {
-      lastIntensity = -1;
-      apply(0);
+      active = false;
+      top.style.filter = 'none';
+      bottom.style.filter = 'none';
+      writeAttr(disp, 'scale', 0);
+      writeAttr(roff, 'dx', 0);
+      writeAttr(coff, 'dx', 0);
+      writeAttr(toff, 'dx', 0);
+      writeAttr(toff, 'dy', 0);
+      scan.style.opacity = '0';
+      noise.style.opacity = '0';
+      top.style.opacity = '1';
+      bottom.style.opacity = '1';
     };
 
-    const loop = () => {
+    // Apply the current frame. `t` is linear 0..1 across the zone; `intensity`
+    // is sin(πt) so distortion peaks at the center and is zero at the edges.
+    const apply = (t: number, intensity: number) => {
+      const on = intensity > 0.003;
+      if (on !== active) {
+        active = on;
+        const f = on ? `url(#${fid})` : 'none';
+        top.style.filter = f;
+        bottom.style.filter = f;
+      }
+
+      if (on) {
+        writeAttr(disp, 'scale', intensity * maxDisplacement);
+        writeAttr(roff, 'dx', -intensity * maxRgbSplit);
+        writeAttr(coff, 'dx', intensity * maxRgbSplit);
+        // Scroll the turbulence pattern so the waves drift like live interference.
+        writeAttr(toff, 'dx', Math.sin(timeAcc * 0.03) * 6 * intensity);
+        writeAttr(toff, 'dy', Math.cos(timeAcc * 0.027) * 4 * intensity);
+        scan.style.opacity = (intensity * scanlineOpacity).toFixed(3);
+        noise.style.opacity = (intensity * noiseOpacity).toFixed(3);
+        noise.style.backgroundPosition =
+          `${((timeAcc * 0.4) % 180).toFixed(1)}px ${((timeAcc * 0.55) % 180).toFixed(1)}px`;
+      } else if (active) {
+        // Just switched off — clear the expensive primitives.
+        writeAttr(disp, 'scale', 0);
+        writeAttr(roff, 'dx', 0);
+        writeAttr(coff, 'dx', 0);
+        writeAttr(toff, 'dx', 0);
+        writeAttr(toff, 'dy', 0);
+        scan.style.opacity = '0';
+        noise.style.opacity = '0';
+      }
+
+      // Both sections dim together at the peak — the "signal weakens" beat.
+      const op = 1 - intensity * sectionDim;
+      top.style.opacity = op.toFixed(3);
+      bottom.style.opacity = op.toFixed(3);
+    };
+
+    const loop = (now: number) => {
       raf = requestAnimationFrame(loop);
-      // No getBoundingClientRect here — just scrollY (cached, no forced layout).
-      const boundaryTop = boundaryDocTop - window.scrollY;
+      const dt = now - lastNow;
+      lastNow = now;
+      timeAcc += dt;
+
+      const rect = sentinel.getBoundingClientRect();
       const vh = window.innerHeight;
       const zone = vh * zoneFactor;
       const center = vh * 0.5;
-      const t = clamp01((center + zone / 2 - boundaryTop) / zone);
+      // t = 0 when the boundary is zone/2 below center, 1 when zone/2 above.
+      const t = clamp01((center + zone / 2 - rect.top) / zone);
       const intensity = Math.sin(t * Math.PI);
-      apply(intensity);
+      apply(t, intensity);
     };
 
-    cacheLayout();
-
-    const ro = new ResizeObserver(cacheLayout);
-    ro.observe(wrap);
-    ro.observe(boundary);
-    window.addEventListener('resize', cacheLayout, { passive: true });
-
-    // Arm the rAF loop only while the boundary is near the viewport.
+    // Arm the rAF loop only while the boundary is near the viewport. The wide
+    // rootMargin means we start a touch before the boundary enters and stop
+    // shortly after it leaves, then reset to a clean picture.
     const io = new IntersectionObserver(
       (entries) => {
         const e = entries[0];
         if (e.isIntersecting) {
           if (!running) {
             running = true;
+            lastNow = performance.now();
             raf = requestAnimationFrame(loop);
           }
         } else if (running) {
@@ -167,83 +198,85 @@ export default function SectionDistortionTransition({
       },
       { rootMargin: '100% 0px 100% 0px' },
     );
-    io.observe(boundary);
+    io.observe(sentinel);
 
     return () => {
       io.disconnect();
-      ro.disconnect();
-      window.removeEventListener('resize', cacheLayout);
       cancelAnimationFrame(raf);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [zoneFactor, maxRgbSplit, maxSliceShift, dimOpacity, scanlineOpacity, grainOpacity]);
-
-  // Per-instance keyframes for the glitch slices. Names are namespaced with the
-  // instance id so multiple transitions on one page never collide.
-  const sliceKeyframes = slices
-    .map((s, idx) => {
-      const name = `${uid}-slice-${idx}`;
-      const amp = s.amp;
-      return `@keyframes ${name} {
-  0%, 100% { transform: translateX(calc(var(--sdt-slice, 0px) * ${amp} * 0)); }
-  20% { transform: translateX(calc(var(--sdt-slice, 0px) * ${amp} * 0.8)); }
-  45% { transform: translateX(calc(var(--sdt-slice, 0px) * ${amp} * -1)); }
-  70% { transform: translateX(calc(var(--sdt-slice, 0px) * ${amp} * 0.5)); }
-  90% { transform: translateX(calc(var(--sdt-slice, 0px) * ${amp} * -0.3)); }
-}`;
-    })
-    .join('\n');
+  }, [fid, maxDisplacement, maxRgbSplit, zoneFactor, noiseOpacity, scanlineOpacity, sectionDim]);
 
   return (
     <div ref={wrapRef} className={`sdt-wrap ${className}`}>
-      {/* Section A — rendered untouched. */}
-      {first}
+      {/* Inline SVG filter — never rendered, only referenced by url(#fid). */}
+      <svg className="sdt-svg" aria-hidden focusable="false" width="0" height="0">
+        <defs>
+          <filter
+            id={fid}
+            x="-15%"
+            y="-15%"
+            width="130%"
+            height="130%"
+            colorInterpolationFilters="sRGB"
+            primitiveUnits="userSpaceOnUse"
+          >
+            {/* Layer 1 — smooth analog wave displacement */}
+            <feTurbulence
+              id={`${fid}-turb`}
+              type="fractalNoise"
+              baseFrequency={baseFrequency}
+              numOctaves={2}
+              seed={4}
+              result="turb"
+            />
+            {/* Drift the noise so the waves live; cheap offset, no turbulence re-render. */}
+            <feOffset id={`${fid}-toff`} in="turb" dx={0} dy={0} result="turbOff" />
+            <feDisplacementMap
+              id={`${fid}-disp`}
+              in="SourceGraphic"
+              in2="turbOff"
+              scale={0}
+              xChannelSelector="R"
+              yChannelSelector="G"
+              result="disp"
+            />
+            {/* Layer 2 — subtle red / cyan channel split on the displaced image */}
+            <feColorMatrix
+              in="disp"
+              type="matrix"
+              values="1 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 1 0"
+              result="rOnly"
+            />
+            <feColorMatrix
+              in="disp"
+              type="matrix"
+              values="0 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 1 0"
+              result="cOnly"
+            />
+            <feOffset id={`${fid}-roff`} in="rOnly" dx={0} dy={0} result="rOff" />
+            <feOffset id={`${fid}-coff`} in="cOnly" dx={0} dy={0} result="cOff" />
+            <feBlend in="rOff" in2="cOff" mode="screen" result="split" />
+            <feBlend in="split" in2="disp" mode="screen" />
+          </filter>
+        </defs>
+      </svg>
 
-      {/* Zero-height boundary marker. The interference overlay is centered on it. */}
-      <div ref={boundaryRef} className="sdt-boundary" aria-hidden>
-        <div ref={hostRef} className="sdt-host" style={{ ['--sdt-i' as string]: 0 }}>
-          {/* Per-instance slice keyframes. */}
-          <style dangerouslySetInnerHTML={{ __html: sliceKeyframes }} />
-
-          {/* Layer 5 — brightness dip (black veil). */}
-          <div className="sdt-dim" />
-
-          {/* Layer 4 — horizontal glitch slices. Each band is a clip-path window
-              over a copy of the overlay content, translated by its own keyframes. */}
-          <div className="sdt-slices">
-            {slices.map((s, idx) => (
-              <div
-                key={idx}
-                className="sdt-slice"
-                style={{
-                  clipPath: `inset(${s.top}% 0 ${100 - s.top - s.height}% 0)`,
-                  animation: `${uid}-slice-${idx} 0.5s steps(2, end) infinite`,
-                  animationDelay: `${s.delay}s`,
-                }}
-              >
-                {/* The slice shows a shifted red/cyan tinted band to read as a
-                    horizontal signal tear. */}
-                <div className="sdt-slice-fill" />
-              </div>
-            ))}
-          </div>
-
-          {/* Layer 3 — RGB split. Two translated overlay layers (red / cyan)
-              blended over the picture. Separation scales with --sdt-rgb. */}
-          <div className="sdt-rgb sdt-rgb-r" />
-          <div className="sdt-rgb sdt-rgb-c" />
-
-          {/* Layer 1 — scanlines. */}
-          <div className="sdt-scanlines" />
-
-          {/* Layer 2 — film grain. */}
-          <div className="sdt-grain" />
-        </div>
+      {/* The two sections, each a filter root so both distort together. */}
+      <div ref={topRef} className="sdt-section" style={{ willChange: 'filter, opacity' }}>
+        {first}
       </div>
-
-      {/* Section B — rendered untouched. */}
-      {second}
+      <div ref={sentinelRef} className="sdt-sentinel" aria-hidden />
+      <div ref={bottomRef} className="sdt-section" style={{ willChange: 'filter, opacity' }}>
+        {second}
+      </div>
       {rest}
+
+      {/* Layers 3 & 4 — fixed full-viewport interference overlay. */}
+      <div ref={overlayRef} className="sdt-overlay">
+        <div ref={scanRef} className="sdt-scanlines" style={{ opacity: 0 }} />
+        <div ref={noiseRef} className="sdt-noise" style={{ opacity: 0 }} />
+      </div>
     </div>
   );
 }
