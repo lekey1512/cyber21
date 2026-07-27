@@ -548,21 +548,14 @@
 
 /* ═══════════════════════════════════════════════════════════════════
    SectionDistortionTransition — analog signal interference
+   Pure GPU-friendly CSS compositing. No SVG filters, no backdrop-filter.
+   JS only writes a single --sdt-i (0..1) and a few derived px values; every
+   visual layer is driven by CSS calc/transitions/animations.
    ═══════════════════════════════════════════════════════════════════ */
 
 .sdt-wrap {
   position: relative;
   isolation: isolate;
-}
-
-/* Inline SVG filter holder — never painted, never laid out. */
-.sdt-svg {
-  position: absolute;
-  width: 0;
-  height: 0;
-  pointer-events: none;
-  border: 0;
-  overflow: hidden;
 }
 
 /* Zero-height boundary marker between the two sections. */
@@ -574,39 +567,83 @@
   z-index: 5;
 }
 
-/* The ONLY element that receives the SVG distortion filter. A thin transparent
-   strip straddling the boundary; backdrop-filter distorts only the pixels painted
-   behind it (i.e. both sections within the strip), so the overlap still distorts
-   together but the filtered paint area is tiny. */
-.sdt-strip {
-  position: absolute;
+/* The interference host. Fixed, full-viewport, centered on the boundary.
+   Opacity follows the sin(πt) envelope via --sdt-i so the whole burst fades
+   in and out smoothly. All children are position:absolute layers composited
+   with transform/opacity/mix-blend-mode only — the cheap GPU properties. */
+.sdt-host {
+  position: fixed;
   left: 0;
   right: 0;
-  top: 0;
+  top: 50%;
+  height: 100vh;
   transform: translateY(-50%);
   pointer-events: none;
-  will-change: backdrop-filter;
+  opacity: var(--sdt-i, 0);
+  --sdt-rgb: 0px;
+  --sdt-slice: 0px;
+  --sdt-dim: 0;
+  --sdt-scan: 0;
+  --sdt-grain: 0;
+  will-change: opacity;
 }
 
-/* Fixed full-viewport interference overlay — only visible during the burst. */
-.sdt-overlay {
-  position: fixed;
-  inset: 0;
-  pointer-events: none;
-  z-index: 60;
-  mix-blend-mode: screen;
-}
-
-/* Dim veil — both sections briefly darken at the peak of the burst. */
+/* Layer 5 — brightness dip. A black veil whose opacity tracks intensity. */
 .sdt-dim {
   position: absolute;
   inset: 0;
   background: #000;
-  opacity: 0;
+  opacity: var(--sdt-dim, 0);
   will-change: opacity;
 }
 
-/* Layer 3 — animated CRT scanlines. */
+/* Layer 4 — horizontal glitch slices. Each band is a clip-path window over a
+   tinted fill, translated by its own per-instance keyframe (see component).
+   The translateX magnitude scales with --sdt-slice, so slices only shift while
+   the burst is active and rest at 0 otherwise. */
+.sdt-slices {
+  position: absolute;
+  inset: 0;
+  mix-blend-mode: screen;
+}
+
+.sdt-slice {
+  position: absolute;
+  inset: 0;
+  will-change: transform;
+}
+
+.sdt-slice-fill {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    90deg,
+    rgba(0, 240, 255, 0.12) 0%,
+    rgba(255, 0, 80, 0.10) 50%,
+    rgba(0, 240, 255, 0.12) 100%
+  );
+}
+
+/* Layer 3 — RGB split. Two translated overlay layers (red / cyan) blended over
+   the picture. Separation scales with --sdt-rgb. */
+.sdt-rgb {
+  position: absolute;
+  inset: 0;
+  mix-blend-mode: screen;
+  will-change: transform;
+}
+
+.sdt-rgb-r {
+  background: rgba(255, 0, 60, 0.10);
+  transform: translateX(calc(var(--sdt-rgb, 0px) * -1));
+}
+
+.sdt-rgb-c {
+  background: rgba(0, 240, 255, 0.10);
+  transform: translateX(var(--sdt-rgb, 0px));
+}
+
+/* Layer 1 — animated CRT scanlines. */
 .sdt-scanlines {
   position: absolute;
   inset: 0;
@@ -619,7 +656,8 @@
   );
   background-size: 100% 4px;
   animation: sdt-scan-drift 1.2s linear infinite;
-  opacity: 0;
+  opacity: var(--sdt-scan, 0);
+  mix-blend-mode: screen;
   will-change: opacity;
 }
 
@@ -628,21 +666,22 @@
   100% { background-position: 0 4px; }
 }
 
-/* Layer 4 — TV film-grain noise. Background drift is pure CSS keyframe;
-   JS only controls opacity. */
-.sdt-noise {
+/* Layer 2 — film grain. Tiled noise texture, CSS keyframe drift.
+   JS only controls opacity via --sdt-grain. */
+.sdt-grain {
   position: absolute;
   inset: -50%;
   width: 200%;
   height: 200%;
   background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 220 220' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
   background-repeat: repeat;
-  opacity: 0;
-  animation: sdt-noise-drift 0.6s steps(4) infinite;
+  opacity: var(--sdt-grain, 0);
+  animation: sdt-grain-drift 0.6s steps(4) infinite;
+  mix-blend-mode: overlay;
   will-change: opacity;
 }
 
-@keyframes sdt-noise-drift {
+@keyframes sdt-grain-drift {
   0%   { background-position: 0 0; }
   25%  { background-position: -60px 40px; }
   50%  { background-position: 80px -30px; }
@@ -652,5 +691,5 @@
 
 @media (prefers-reduced-motion: reduce) {
   .sdt-scanlines,
-  .sdt-noise { animation: none !important; }
+  .sdt-grain { animation: none !important; }
 }
