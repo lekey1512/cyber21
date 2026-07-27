@@ -565,17 +565,27 @@
   overflow: hidden;
 }
 
-/* Each section is its own filter root so both distort together in the overlap. */
-.sdt-section {
-  position: relative;
-}
-
-/* Zero-height marker between the two sections; the rAF loop measures its top. */
-.sdt-sentinel {
+/* Zero-height boundary marker between the two sections. */
+.sdt-boundary {
   position: relative;
   width: 100%;
   height: 0;
   pointer-events: none;
+  z-index: 5;
+}
+
+/* The ONLY element that receives the SVG distortion filter. A thin transparent
+   strip straddling the boundary; backdrop-filter distorts only the pixels painted
+   behind it (i.e. both sections within the strip), so the overlap still distorts
+   together but the filtered paint area is tiny. */
+.sdt-strip {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  transform: translateY(-50%);
+  pointer-events: none;
+  will-change: backdrop-filter;
 }
 
 /* Fixed full-viewport interference overlay — only visible during the burst. */
@@ -585,6 +595,15 @@
   pointer-events: none;
   z-index: 60;
   mix-blend-mode: screen;
+}
+
+/* Dim veil — both sections briefly darken at the peak of the burst. */
+.sdt-dim {
+  position: absolute;
+  inset: 0;
+  background: #000;
+  opacity: 0;
+  will-change: opacity;
 }
 
 /* Layer 3 — animated CRT scanlines. */
@@ -600,6 +619,7 @@
   );
   background-size: 100% 4px;
   animation: sdt-scan-drift 1.2s linear infinite;
+  opacity: 0;
   will-change: opacity;
 }
 
@@ -608,7 +628,8 @@
   100% { background-position: 0 4px; }
 }
 
-/* Layer 4 — TV film-grain noise. */
+/* Layer 4 — TV film-grain noise. Background drift is pure CSS keyframe;
+   JS only controls opacity. */
 .sdt-noise {
   position: absolute;
   inset: -50%;
@@ -617,9 +638,19 @@
   background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 220 220' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
   background-repeat: repeat;
   opacity: 0;
-  will-change: opacity, background-position;
+  animation: sdt-noise-drift 0.6s steps(4) infinite;
+  will-change: opacity;
+}
+
+@keyframes sdt-noise-drift {
+  0%   { background-position: 0 0; }
+  25%  { background-position: -60px 40px; }
+  50%  { background-position: 80px -30px; }
+  75%  { background-position: -40px -70px; }
+  100% { background-position: 0 0; }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .sdt-scanlines { animation: none !important; }
+  .sdt-scanlines,
+  .sdt-noise { animation: none !important; }
 }
