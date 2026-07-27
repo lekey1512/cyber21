@@ -51,7 +51,7 @@ export default function Tokenomics() {
     <section id="tokenomics" className="relative overflow-hidden px-5 py-24">
       <div data-depth="background"><TokenomicsBackground /></div>
       <div data-depth="content" className="relative z-10 mx-auto max-w-6xl">
-        <div className="mb-14 text-center reveal-glitch">
+        <div data-depth="decorative" className="mb-14 text-center reveal-glitch">
           <div className="font-mono text-xs tracking-[0.4em] text-cyber-cyan animate-flicker">// THE NUMBERS</div>
           <h2 className="mt-3 font-display text-4xl font-black tracking-tight text-white sm:text-5xl">
             <span className="text-glow-magenta text-cyber-magenta rgb-hover">TOKENOMICS</span> 2.0
@@ -61,7 +61,7 @@ export default function Tokenomics() {
           </p>
         </div>
 
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <div data-depth="decorative" className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
           {STATS.map((s, i) => (
             <div key={i} className="reveal-pop clip-cyber scan-card holo-card border border-cyber-cyan/20 bg-cyber-panel/60 p-6 text-center transition-all hover:border-cyber-cyan/50" style={{ transitionDelay: `${i * 80}ms` }}>
               <CountUp end={s.value} suffix={s.suffix} />
@@ -72,7 +72,7 @@ export default function Tokenomics() {
         </div>
 
         {/* Tax breakdown bar */}
-        <div className="reveal-pop mt-12 clip-cyber scan-card border border-cyber-magenta/30 bg-cyber-dark/60 p-6 box-glow-magenta">
+        <div data-depth="content" className="reveal-pop mt-12 clip-cyber scan-card border border-cyber-magenta/30 bg-cyber-dark/60 p-6 box-glow-magenta">
           <div className="mb-4 flex items-center justify-between">
             <h3 className="font-display text-lg font-bold tracking-wide text-cyber-magenta">
               <Flame className="mr-2 inline h-5 w-5" /> TRANSACTION TAX — 6.9%

@@ -178,7 +178,7 @@ export default function CyberpsychoMeter() {
       <div data-depth="background"><HudBackground intensity={intensity} color={current.color} nodes={nodes} conns={conns} pulses={pulses} radarDur={radarDur} /></div>
 
       <div data-depth="content" className="relative z-10 mx-auto max-w-3xl">
-        <div className="mb-12 text-center reveal-glitch">
+        <div data-depth="decorative" className="mb-12 text-center reveal-glitch">
           <div className="font-mono text-xs tracking-[0.4em] text-cyber-yellow animate-flicker">// LIVE DIAGNOSTIC</div>
           <h2 className="mt-3 font-display text-4xl font-black tracking-tight text-white sm:text-5xl">
             CYBERPSYCHO <span className="text-cyber-magenta text-glow-magenta rgb-hover">METER</span>
@@ -190,7 +190,7 @@ export default function CyberpsychoMeter() {
         </div>
 
         {/* HUD bracket frame around the main card */}
-        <div className="relative reveal-pop">
+        <div data-depth="content" className="relative reveal-pop">
           <HudBrackets intensity={intensity} />
 
           <div

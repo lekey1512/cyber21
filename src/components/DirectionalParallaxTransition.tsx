@@ -4,27 +4,32 @@ import type { ReactElement, ReactNode } from 'react';
 /**
  * DirectionalParallaxTransition
  *
- * Wraps two adjacent sections and gives the hand-off between them a quiet,
- * cinematic sense of depth using only directional parallax. No glitches,
- * flashes, distortion, noise, scanlines, RGB split, blur, masks, clip-path,
- * canvas, shaders, or fullscreen overlays — only `translate3d` on transform.
+ * Wraps two adjacent sections and gives the hand-off between them a
+ * cinematic sense of depth using only GPU-friendly transforms (translate3d,
+ * scale) and opacity. No glitches, flashes, distortion, blur, masks,
+ * clip-path, canvas, shaders, or fullscreen overlays.
  *
  * How it feels:
- *   - As the boundary nears the viewport center, the exiting section's
- *     layers lag behind the scroll (inertia / drifting away).
- *   - The incoming section's layers lead the scroll (rushing toward you),
- *     then ease back into place as it becomes the dominant layer.
- *   - Three depth tiers (background / decorative / content) move by
- *     different magnitudes, so the space reads as layered without the
- *     movement ever becoming consciously noticeable.
+ *   - As the boundary nears the viewport center, the exiting section drifts
+ *     away: it lags the scroll, scales down subtly, and dims slightly.
+ *   - The incoming section starts a touch closer to the viewer (scaled down,
+ *     dimmed, pushed down) and settles into its resting position as it
+ *     becomes the dominant layer around the viewport center.
+ *   - Multiple depth tiers move independently so the scene reads as layered
+ *     3D space rather than a flat cut.
+ *
+ * The strongest motion is concentrated in the middle of the transition
+ * window (boundary ~25%→75% of viewport height); outside that, everything
+ * eases back to its resting state so there is no visible pop on enter/leave.
  *
  * Performance:
  *   - An IntersectionObserver on a zero-height sentinel at the boundary
  *     gates a single requestAnimationFrame loop. The loop only runs while
  *     the boundary is near the viewport and is killed the instant it leaves.
- *   - Per frame: one getBoundingClientRect (the sentinel) + N transform
- *     writes. No layout reads on the layers themselves, no reflows, no
- *     paint-heavy properties. All work is GPU-composited via translate3d.
+ *   - Per frame: one getBoundingClientRect (the sentinel) + N transform/
+ *     opacity writes. No layout reads on the layers, no reflows, no
+ *     paint-heavy properties. All work is GPU-composited.
+ *   - will-change is set on enter and cleared on leave.
  *
  * Reuse:
  *   <DirectionalParallaxTransition>
@@ -34,24 +39,28 @@ import type { ReactElement, ReactNode } from 'react';
  *
  * Sections opt their layers in by tagging elements with:
  *   data-depth="background" | "decorative" | "content"
- * Untagged sections are left untouched.
+ * Untagged elements are left untouched. Tag nested groups independently
+ * for richer depth — the component moves every tagged element, so a tagged
+ * wrapper plus tagged children compound their motion (useful for extra
+ * parallax between a group and its members).
  */
 
 type Depth = 'background' | 'decorative' | 'content';
 
-// Parallax magnitude per depth tier. Bigger = more deviation from natural
-// scroll. Background is the most "distant" (lags/leads the most), content the
-// most grounded (closest to natural scroll). Values are fractions of one
-// viewport height, kept deliberately small so the effect stays sub-perceptual.
-const FACTORS: Record<Depth, number> = {
-  background: 0.03,
-  decorative: 0.018,
-  content: 0.008,
-};
+// Per-tier magnitudes. Translate is a fraction of viewport height; scale and
+// opacity are absolute deltas from the resting (1 / 1) state. Background is
+// the most "distant" so it deviates the most; content stays closest to natural.
+const TIER = {
+  background: { t: 0.06, s: 0.04, o: 0.18 },
+  decorative: { t: 0.04, s: 0.03, o: 0.14 },
+  content: { t: 0.02, s: 0.02, o: 0.10 },
+} as const;
 
 interface Layer {
   el: HTMLElement;
-  factor: number;
+  t: number;
+  s: number;
+  o: number;
   exiting: boolean;
 }
 
@@ -62,6 +71,12 @@ interface Props {
 }
 
 const clamp01 = (v: number) => (v < 0 ? 0 : v > 1 ? 1 : v);
+// Hermite smoothstep — cinematic ease, flat tangent at both ends so motion
+// starts and settles without any visible jerk.
+const smooth = (a: number, b: number, x: number) => {
+  const k = clamp01((x - a) / (b - a));
+  return k * k * (3 - 2 * k);
+};
 
 export default function DirectionalParallaxTransition({ children, zone = 1 }: Props) {
   const wrapRef = useRef<HTMLDivElement>(null);
@@ -72,7 +87,6 @@ export default function DirectionalParallaxTransition({ children, zone = 1 }: Pr
     const sentinel = sentinelRef.current;
     if (!wrap || !sentinel) return;
 
-    // The two sections are the sentinel's siblings in the wrapper.
     const secA = sentinel.previousElementSibling as HTMLElement | null;
     const secB = sentinel.nextElementSibling as HTMLElement | null;
     if (!secA || !secB) return;
@@ -81,9 +95,12 @@ export default function DirectionalParallaxTransition({ children, zone = 1 }: Pr
       wrap.querySelectorAll<HTMLElement>('[data-depth]'),
     ).map((el) => {
       const d = (el.dataset.depth as Depth | undefined) ?? 'content';
+      const tier = TIER[d] ?? TIER.content;
       return {
         el,
-        factor: FACTORS[d] ?? FACTORS.content,
+        t: tier.t,
+        s: tier.s,
+        o: tier.o,
         exiting: secA.contains(el),
       };
     });
@@ -97,26 +114,38 @@ export default function DirectionalParallaxTransition({ children, zone = 1 }: Pr
     const update = () => {
       raf = requestAnimationFrame(update);
       const vh = window.innerHeight;
-      // Boundary position in viewport coords (sentinel is zero-height).
       const boundaryY = sentinel.getBoundingClientRect().top;
       // 0 when boundary is at the bottom of the viewport, 1 at the top.
       const t = clamp01((vh - boundaryY) / vh);
 
+      // Exiting recedes over the first half (boundary 75%→50% of viewport);
+      // incoming settles over the second half (50%→25%). Both ease fully
+      // across the middle 50% of the transition window.
+      const e = smooth(0.25, 0.5, t);
+      const i = smooth(0.5, 0.75, t);
+
       for (const l of layers) {
-        // Exiting layers lag (pushed down → move up slower than scroll).
-        // Incoming layers lead (pushed up → move up faster), then ease
-        // back to natural as the section settles into place (t→1).
-        const offset = l.exiting
-          ? l.factor * t * vh
-          : -l.factor * t * (1 - t) * 4 * vh;
-        l.el.style.transform = `translate3d(0,${offset.toFixed(2)}px,0)`;
+        if (l.exiting) {
+          const y = l.t * e * vh;
+          const sc = 1 - l.s * e;
+          const op = 1 - l.o * e;
+          l.el.style.transform = `translate3d(0,${y.toFixed(2)}px,0) scale(${sc.toFixed(4)})`;
+          l.el.style.opacity = op.toFixed(3);
+        } else {
+          const r = 1 - i; // 1 at rest-start, 0 once settled
+          const y = l.t * r * vh;
+          const sc = 1 - l.s * r;
+          const op = 1 - l.o * r;
+          l.el.style.transform = `translate3d(0,${y.toFixed(2)}px,0) scale(${sc.toFixed(4)})`;
+          l.el.style.opacity = op.toFixed(3);
+        }
       }
     };
 
     const start = () => {
       if (active) return;
       active = true;
-      for (const l of layers) l.el.style.willChange = 'transform';
+      for (const l of layers) l.el.style.willChange = 'transform, opacity';
       raf = requestAnimationFrame(update);
     };
 
@@ -127,12 +156,10 @@ export default function DirectionalParallaxTransition({ children, zone = 1 }: Pr
       for (const l of layers) {
         l.el.style.willChange = '';
         l.el.style.transform = '';
+        l.el.style.opacity = '';
       }
     };
 
-    // Activate slightly before the boundary enters the zone so the first
-    // frame of motion is already correct (offsets are 0 at the zone edge,
-    // so there is no visible jump on start or stop).
     const margin = `${zone * 100}% 0px ${zone * 100}% 0px`;
     const obs = new IntersectionObserver(
       (entries) => {
