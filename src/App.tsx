@@ -8,7 +8,6 @@ import About from './components/About';
 import CrewDatabase from './components/CrewDatabase';
 import Tokenomics from './components/Tokenomics';
 import CyberpsychoMeter from './components/CyberpsychoMeter';
-import SectionDistortionTransition from './components/SectionDistortionTransition';
 import Roadmap from './components/Roadmap';
 import HowToBuy from './components/HowToBuy';
 import FAQ from './components/FAQ';
@@ -41,17 +40,8 @@ export default function App() {
         </div>
         <About />
         <CrewDatabase />
-        <SectionDistortionTransition
-          maxDisplacement={8}
-          maxRgbSplit={4}
-          zoneFactor={0.7}
-          noiseOpacity={0.12}
-          scanlineOpacity={0.18}
-          sectionDim={0.12}
-        >
-          <Tokenomics />
-          <CyberpsychoMeter />
-        </SectionDistortionTransition>
+        <Tokenomics />
+        <CyberpsychoMeter />
         <Roadmap />
         <HowToBuy />
         <FAQ />
