@@ -4,6 +4,7 @@ import {
   Cpu, Radio, Terminal, Lock, Signal,
 } from 'lucide-react';
 import HowToBuyBackground from './HowToBuyBackground';
+import FuzzyText from './FuzzyText';
 import { useHowToBuyBoot } from '@/lib/useHowToBuyBoot';
 
 /* ═══════════════════════════════════════════════════════════════════
@@ -53,9 +54,11 @@ export default function HowToBuy() {
         {/* ── Header ── */}
         <div className="mb-16 text-center">
           <div className="htb-title font-mono text-xs tracking-[0.4em] text-cyber-yellow animate-flicker">// ACQUISITION PROTOCOL</div>
-          <h2 className="htb-title mt-3 font-display text-4xl font-black tracking-tight text-white sm:text-5xl md:text-6xl">
-            HOW TO <span className="text-cyber-yellow text-glow-yellow rgb-hover">BUY</span>
-          </h2>
+          <FuzzyText
+            text="HOW TO BUY"
+            as="h2"
+            className="htb-title mt-3 font-display text-4xl font-black tracking-tight text-white sm:text-5xl md:text-6xl text-glow-yellow"
+          />
           <p className="htb-subtitle mx-auto mt-4 max-w-xl font-mono text-sm tracking-[0.3em] text-cyber-cyan/70">
             ACQUISITION TERMINAL
           </p>

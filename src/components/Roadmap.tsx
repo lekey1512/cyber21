@@ -3,6 +3,7 @@ import gsap from 'gsap';
 import { Draggable } from 'gsap/Draggable';
 import { InertiaPlugin } from 'gsap/InertiaPlugin';
 import { Rocket, Skull, Music, Globe, ArrowLeft, ArrowRight } from 'lucide-react';
+import ShuffleText from './ShuffleText';
 
 gsap.registerPlugin(Draggable, InertiaPlugin);
 
@@ -248,9 +249,11 @@ export default function Roadmap() {
 
       <div className="relative z-10 mb-12 text-center">
         <div className="font-mono text-xs tracking-[0.4em] text-cyber-green animate-flicker">// THE MISSION LOG</div>
-        <h2 className="mt-3 font-display text-4xl font-black tracking-tight text-white sm:text-5xl">
-          ROAD<span className="text-cyber-green text-glow-cyan rgb-hover">MAP</span>
-        </h2>
+        <ShuffleText
+          text="ROADMAP"
+          as="h2"
+          className="reveal-glitch mt-3 font-display text-4xl font-black tracking-tight text-white sm:text-5xl"
+        />
         <p className="mx-auto mt-5 max-w-xl font-body text-lg text-gray-400">
           We don't make promises. We make threats. Here's the plan — subject to cyberpsycho disruption.
         </p>
