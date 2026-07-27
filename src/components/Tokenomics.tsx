@@ -49,8 +49,8 @@ function CountUp({ end, suffix }: { end: number; suffix: string }) {
 export default function Tokenomics() {
   return (
     <section id="tokenomics" className="relative overflow-hidden px-5 py-24">
-      <TokenomicsBackground />
-      <div className="relative z-10 mx-auto max-w-6xl">
+      <div data-depth="background"><TokenomicsBackground /></div>
+      <div data-depth="content" className="relative z-10 mx-auto max-w-6xl">
         <div className="mb-14 text-center reveal-glitch">
           <div className="font-mono text-xs tracking-[0.4em] text-cyber-cyan animate-flicker">// THE NUMBERS</div>
           <h2 className="mt-3 font-display text-4xl font-black tracking-tight text-white sm:text-5xl">
