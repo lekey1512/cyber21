@@ -8,7 +8,6 @@ import About from './components/About';
 import CrewDatabase from './components/CrewDatabase';
 import Tokenomics from './components/Tokenomics';
 import CyberpsychoMeter from './components/CyberpsychoMeter';
-import RGBSplitFlashTransition from './components/RGBSplitFlashTransition';
 import Roadmap from './components/Roadmap';
 import HowToBuy from './components/HowToBuy';
 import FAQ from './components/FAQ';
@@ -41,10 +40,8 @@ export default function App() {
         </div>
         <About />
         <CrewDatabase />
-        <RGBSplitFlashTransition>
-          <Tokenomics />
-          <CyberpsychoMeter />
-        </RGBSplitFlashTransition>
+        <Tokenomics />
+        <CyberpsychoMeter />
         <Roadmap />
         <HowToBuy />
         <FAQ />
